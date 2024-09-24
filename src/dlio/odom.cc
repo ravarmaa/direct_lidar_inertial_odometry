@@ -923,12 +923,6 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& 
   Eigen::Matrix4f T_W_2_L0 = this->lidar0.integrated_T; //* this->lidar0.baselink2lidar_T;
   Eigen::Matrix4f T_W_2_L1 = this->lidar1.integrated_T; //* this->lidar1.baselink2lidar_T;
 
-
-  // // rosinfo to check the transformation
-  // ROS_INFO("T_W_2_L0: %f %f %f %f", T_W_2_L0(0, 3), T_W_2_L0(1, 3), T_W_2_L0(2, 3), T_W_2_L0(3, 3));
-  // ROS_INFO("T_W_2_L1: %f %f %f %f", T_W_2_L1(0, 3), T_W_2_L1(1, 3), T_W_2_L1(2, 3), T_W_2_L1(3, 3));
-
-
   Eigen::Matrix4f T_lidar1_to_lidar0 = T_W_2_L1.inverse() * T_W_2_L0;
 
 
