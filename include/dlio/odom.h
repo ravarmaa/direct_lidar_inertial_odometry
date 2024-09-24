@@ -25,24 +25,32 @@ private:
 
   struct State;
   struct ImuMeas;
+  struct Lidar;
 
   void getParams();
 
-  void callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& pc);
+  void callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& pc0, const sensor_msgs::PointCloud2ConstPtr& pc1);
   void callbackImu(const sensor_msgs::Imu::ConstPtr& imu);
+  void asyncCallBack(const sensor_msgs::PointCloud2ConstPtr& pc, Lidar& lidar);
+  void lidar0cb(const sensor_msgs::PointCloud2ConstPtr& pc);
+  void lidar1cb(const sensor_msgs::PointCloud2ConstPtr& pc);
 
   void publishPose(const ros::TimerEvent& e);
 
-  void publishToROS(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud);
-  void publishCloud(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud);
+  void publishToROS(Eigen::Matrix4f T_cloud);
+  void publishCloud(Eigen::Matrix4f T_cloud, Lidar& lidar);
   void publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,
                        pcl::PointCloud<PointType>::ConstPtr> kf, ros::Time timestamp);
 
-  void getScanFromROS(const sensor_msgs::PointCloud2ConstPtr& pc);
-  void preprocessPoints();
-  void deskewPointcloud();
+  void getScanFromROS(const sensor_msgs::PointCloud2ConstPtr& pc, Lidar& lidar);
+  void preprocessPoints(Lidar& lidar);
+  void deskewPointcloud(Lidar& lidar);
   void initializeInputTarget();
   void setInputSource();
+
+  pcl::PointCloud<PointType>::Ptr mergePointClouds(
+    const pcl::PointCloud<PointType>::ConstPtr& scan1,
+    const pcl::PointCloud<PointType>::ConstPtr& scan2);
 
   void initializeDLIO();
 
@@ -86,16 +94,19 @@ private:
   ros::Timer publish_timer;
 
   // Subscribers
-  ros::Subscriber lidar_sub;
   ros::Subscriber imu_sub;
+
+  typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::PointCloud2, sensor_msgs::PointCloud2> SyncPolicy;
+  std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync;
 
   // Publishers
   ros::Publisher odom_pub;
   ros::Publisher pose_pub;
   ros::Publisher path_pub;
+
   ros::Publisher kf_pose_pub;
   ros::Publisher kf_cloud_pub;
-  ros::Publisher deskewed_pub;
+  
 
   // ROS Msgs
   nav_msgs::Odometry odom_ros;
@@ -110,8 +121,6 @@ private:
   std::atomic<bool> imu_calibrated;
   std::atomic<bool> submap_hasChanged;
   std::atomic<bool> gicp_hasConverged;
-  std::atomic<bool> deskew_status;
-  std::atomic<int> deskew_size;
 
   // Threads
   std::thread publish_thread;
@@ -131,23 +140,14 @@ private:
   std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> keyframe_transformations;
   std::mutex keyframes_mutex;
 
-  // Sensor Type
-  dlio::SensorType sensor;
-
   // Frames
   std::string odom_frame;
   std::string baselink_frame;
-  std::string lidar_frame;
   std::string imu_frame;
 
   // Preprocessing
   pcl::CropBox<PointType> crop;
   pcl::VoxelGrid<PointType> voxel;
-
-  // Point Clouds
-  pcl::PointCloud<PointType>::ConstPtr original_scan;
-  pcl::PointCloud<PointType>::ConstPtr deskewed_scan;
-  pcl::PointCloud<PointType>::ConstPtr current_scan;
 
   // Keyframes
   pcl::PointCloud<PointType>::ConstPtr keyframe_cloud;
@@ -172,11 +172,7 @@ private:
   bool main_loop_running;
   std::mutex main_loop_running_mutex;
 
-  // Timestamps
-  ros::Time scan_header_stamp;
-  double scan_stamp;
-  double prev_scan_stamp;
-  double scan_dt;
+  
   std::vector<double> comp_times;
   std::vector<double> imu_rates;
   std::vector<double> lidar_rates;
@@ -189,21 +185,17 @@ private:
   nano_gicp::NanoGICP<PointType, PointType> gicp_temp;
 
   // Transformations
-  Eigen::Matrix4f T, T_prior, T_corr;
   Eigen::Quaternionf q_final;
 
   Eigen::Vector3f origin;
 
-  struct Extrinsics {
-    struct SE3 {
+  struct SE3 {
       Eigen::Vector3f t;
       Eigen::Matrix3f R;
-    };
-    SE3 baselink2imu;
-    SE3 baselink2lidar;
-    Eigen::Matrix4f baselink2imu_T;
-    Eigen::Matrix4f baselink2lidar_T;
-  }; Extrinsics extrinsics;
+  };
+
+  SE3 baselink2imu;
+  Eigen::Matrix4f baselink2imu_T;
 
   // IMU
   ros::Time imu_stamp;
@@ -264,8 +256,59 @@ private:
     Eigen::Vector3f p; // position in world frame
     Eigen::Quaternionf q; // orientation in world frame
   };
-  Pose lidarPose;
+
+
+  int using_lidar;
+
   Pose imuPose;
+  Pose lidarPose; // world-->baselink in reference lidar's time
+  Eigen::Matrix4f T, T_prior, T_corr; // ICP transformations world-->baselink
+
+  // int using_lidar;
+  struct Lidar {
+    int id;
+    Eigen::Matrix4f baselink2lidar_T;
+    SE3 baselink2lidar;
+
+    Eigen::Matrix4f integrated_T;
+
+    State current_state;
+    State previous_state;
+
+    // Timestamps
+    ros::Time scan_header_stamp;
+    double scan_stamp;
+    double prev_scan_stamp;
+    double scan_dt;
+
+    ros::Time debug_time;
+
+    std::string frame;
+    // Point Clouds
+    pcl::PointCloud<PointType>::ConstPtr original_scan;
+    pcl::PointCloud<PointType>::ConstPtr deskewed_scan;
+    pcl::PointCloud<PointType>::ConstPtr current_scan;
+
+    bool deskew_;
+    bool time_offset_;
+
+    std::atomic<bool> deskew_status;
+    std::atomic<int> deskew_size;
+
+    ros::Publisher deskewed_pub;
+
+    message_filters::Subscriber<sensor_msgs::PointCloud2> synced_sub;
+    ros::Subscriber async_sub;
+    // ros::Subscriber sub;
+
+    // Sensor Type
+    dlio::SensorType sensor;
+  }; 
+
+  Lidar lidar0;
+  Lidar lidar1;
+  pcl::PointCloud<PointType>::ConstPtr combined_scan;
+
 
   // Metrics
   struct Metrics {
@@ -282,11 +325,9 @@ private:
   std::string version_;
   int num_threads_;
 
-  bool deskew_;
+  
 
   double gravity_;
-
-  bool time_offset_;
 
   bool adaptive_params_;
 

@@ -52,6 +52,9 @@ std::string to_string_with_precision(const T a_value, const int n = 6)
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <tf2_ros/transform_broadcaster.h>
+#include <message_filters/subscriber.h>
+#include <message_filters/synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
 
 // BOOST
 #include <boost/format.hpp>
@@ -59,6 +62,8 @@ std::string to_string_with_precision(const T a_value, const int n = 6)
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptor/indexed.hpp>
 #include <boost/range/adaptor/adjacent_filtered.hpp>
+#include <boost/bind.hpp>
+
 
 // PCL
 #define PCL_NO_PRECOMPILE
